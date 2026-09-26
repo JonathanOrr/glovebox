@@ -5,3 +5,5 @@ calibration.json
 tools/calibration/work/
 __pycache__/
 *.blend1
+# Python environment (PyTorch on ROCm), several GB
+.venv/
