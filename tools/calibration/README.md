@@ -76,6 +76,7 @@ Each car is a file in `vehicles/`:
 | `model_3_hw3` | Model 3 (HW3) |
 | `model_y_juniper_hw4` | Model Y Juniper (HW4) |
 | `model_y_juniper_standard_hw4` | Model Y Juniper Standard (HW4) |
+| `model_y_l_hw4` | Model Y L, the six-seater (HW4) |
 | `model_y_hw3` | Model Y (HW3) |
 | `model_s_2021_hw4` | Model S 2021+, including Plaid (HW4) |
 | `model_x_2021_hw4` | Model X 2021+ (HW4) |
