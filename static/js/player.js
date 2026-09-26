@@ -188,7 +188,11 @@ function tick(once) {
   if (m) {
     Object.values(cur.videos).forEach(v => {
       if (v.el === m || !v.el.src || v.el.readyState < 1) return;
-      if (Math.abs(v.el.currentTime - m.currentTime) > 0.12) v.el.currentTime = m.currentTime;
+      // Browsers let separate videos drift apart by several frames. Far off: jump. Otherwise speed the
+      // camera up or slow it down a little so it catches up smoothly (a jump would stutter).
+      const drift = v.el.currentTime - m.currentTime;
+      if (Math.abs(drift) > 0.3 || m.paused) { if (Math.abs(drift) > 0.01) v.el.currentTime = m.currentTime; }
+      else v.el.playbackRate = cur.rate * (1 - Math.max(-0.2, Math.min(0.2, drift * 4)));
       if (cur.playing && v.el.paused && !m.paused) v.el.play().catch(() => {});
     });
     const g = globalTime();
