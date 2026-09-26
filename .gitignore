@@ -1,0 +1,7 @@
+# Local 3D car models (not ours to publish)
+models/
+# Per-car calibration output and scratch data
+calibration.json
+tools/calibration/work/
+__pycache__/
+*.blend1

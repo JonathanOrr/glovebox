@@ -1,0 +1,77 @@
+{
+ "name": "Model Y Juniper Standard (HW4)",
+ "about": "Camera positions placed by hand on a 3D model, exported by blender_cameras.py",
+ "eye": [
+  0,
+  1.401,
+  1.331
+ ],
+ "cameras": {
+  "front": {
+   "pos": [
+    0.0,
+    1.4413,
+    1.8805
+   ],
+   "aim": [
+    0.0,
+    -5.5
+   ]
+  },
+  "left_pillar": {
+   "pos": [
+    -0.7089,
+    1.3928,
+    1.06
+   ],
+   "aim": [
+    -48.0,
+    -18.0
+   ]
+  },
+  "left_repeater": {
+   "pos": [
+    -0.9367,
+    0.803,
+    2.5063
+   ],
+   "aim": [
+    -147.8,
+    0.7
+   ]
+  },
+  "back": {
+   "pos": [
+    -0.002,
+    1.013,
+    -0.8873
+   ],
+   "aim": [
+    180.0,
+    -22.1
+   ]
+  },
+  "right_pillar": {
+   "pos": [
+    0.7089,
+    1.3928,
+    1.06
+   ],
+   "aim": [
+    48.0,
+    -18.0
+   ]
+  },
+  "right_repeater": {
+   "pos": [
+    0.9367,
+    0.803,
+    2.5063
+   ],
+   "aim": [
+    147.8,
+    0.7
+   ]
+  }
+ }
+}

@@ -1,0 +1,77 @@
+{
+ "name": "Cybertruck (HW4)",
+ "about": "Camera positions placed by hand on a 3D model, exported by blender_cameras.py",
+ "eye": [
+  0,
+  1.609,
+  2.044
+ ],
+ "cameras": {
+  "front": {
+   "pos": [
+    0.0,
+    1.6493,
+    2.5941
+   ],
+   "aim": [
+    0.0,
+    -4.9
+   ]
+  },
+  "left_pillar": {
+   "pos": [
+    -0.7999,
+    1.55,
+    1.8525
+   ],
+   "aim": [
+    -61.5,
+    -6.8
+   ]
+  },
+  "left_repeater": {
+   "pos": [
+    -1.0228,
+    0.9996,
+    3.3381
+   ],
+   "aim": [
+    -142.7,
+    -2.4
+   ]
+  },
+  "back": {
+   "pos": [
+    0.0,
+    1.2405,
+    -1.1247
+   ],
+   "aim": [
+    180.0,
+    -34.0
+   ]
+  },
+  "right_pillar": {
+   "pos": [
+    0.7999,
+    1.55,
+    1.8525
+   ],
+   "aim": [
+    61.5,
+    -6.8
+   ]
+  },
+  "right_repeater": {
+   "pos": [
+    1.0228,
+    0.9996,
+    3.3381
+   ],
+   "aim": [
+    142.7,
+    -2.4
+   ]
+  }
+ }
+}
