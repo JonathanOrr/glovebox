@@ -71,7 +71,8 @@ uniform vec4 uLens2[6];  // k2, image-circle radius (0 = none), max angle (radia
 uniform vec3 uPos[6];    // camera positions (metres, car frame)
 uniform vec3 uEye;       // viewpoint
 uniform float uFocus;    // bowl wall distance (metres)
-uniform int uMode;       // 0 = look around, 1 = panorama strip
+uniform int uMode;       // 0 = look around, 1 = panorama strip, 2 = top down (straight down onto the road)
+uniform float uDist;     // top down: metres from the middle of the car to the top of the view
 uniform vec3 uView;      // yaw, pitch, vertical fov (radians)
 uniform float uAspect;   // canvas width / height
 
@@ -89,6 +90,9 @@ vec3 rayDir() {
   float cy = cos(uView.x), sy = sin(uView.x);
   return vec3(d.x * cy + d.z * sy, d.y, -d.x * sy + d.z * cy);
 }
+
+// Top down: the car's footprint (x right, z forward from the rear axle), drawn flat.
+const vec2 CAR_LO = vec2(-0.93, -0.98), CAR_HI = vec2(0.93, 3.76);
 
 // Where the view ray meets the bowl: the road if it hits within the focus distance,
 // otherwise the wall.
@@ -120,7 +124,16 @@ vec4 cam(sampler2D tex, mat3 R, vec4 L, vec4 L2, vec3 pos, vec3 P) {
 }
 
 void main() {
-  vec3 P = bowlPoint(rayDir());
+  vec3 d = rayDir(), P;
+  if (uMode == 2) {
+    // straight down, no perspective: each pixel is a point on the road, forward is up
+    vec2 g = vec2((vUv.x - 0.5) * uAspect, vUv.y - 0.5) * 2.0 * uDist + vec2(0.0, 1.39);
+    if (all(greaterThan(g, CAR_LO)) && all(lessThan(g, CAR_HI))) {
+      bool bonnet = g.y > CAR_HI.y - 0.9;
+      outColor = vec4(bonnet ? vec3(0.42, 0.44, 0.5) : vec3(0.3, 0.32, 0.36), 1.0); return;
+    }
+    P = vec3(g.x, 0.0, g.y);
+  } else P = bowlPoint(d);
   vec4 s = cam(uTex0, uRot[0], uLens[0], uLens2[0], uPos[0], P) + cam(uTex1, uRot[1], uLens[1], uLens2[1], uPos[1], P)
          + cam(uTex2, uRot[2], uLens[2], uLens2[2], uPos[2], P) + cam(uTex3, uRot[3], uLens[3], uLens2[3], uPos[3], P)
          + cam(uTex4, uRot[4], uLens[4], uLens2[4], uPos[4], P) + cam(uTex5, uRot[5], uLens[5], uLens2[5], uPos[5], P);
@@ -157,7 +170,7 @@ export function open(videos, container) {
   const overlay = document.createElement("div");
   overlay.className = "pano-ui";
   overlay.innerHTML = `
-    <div class="seg"><button data-m="0">Look around</button><button data-m="1">Panorama</button></div>
+    <div class="seg"><button data-m="0">Look around</button><button data-m="1">Panorama</button><button data-m="2">Top down</button></div>
     <label class="focus" title="Distance where camera seams line up best">Focus <input type="range" min="0" max="1" step="0.001"><span></span></label>
     <button data-a="calib">Calibrate</button>
     <div class="pano-hint">Drag to look around · scroll to zoom</div>
@@ -193,7 +206,7 @@ export function open(videos, container) {
   });
   const loc = n => gl.getUniformLocation(prog, n);
   P = { canvas, overlay, gl, prog, tex, videos, loaded: {}, lastTime: {}, mode: 0,
-        view: { yaw: 0, pitch: -5, fov: 90 }, loc: { rot: loc("uRot"), lens: loc("uLens"), lens2: loc("uLens2"), pos: loc("uPos"), eye: loc("uEye"), focus: loc("uFocus"), mode: loc("uMode"), view: loc("uView"), aspect: loc("uAspect") } };
+        view: { yaw: 0, pitch: -5, fov: 90 }, top: 8, loc: { dist: loc("uDist"),  rot: loc("uRot"), lens: loc("uLens"), lens2: loc("uLens2"), pos: loc("uPos"), eye: loc("uEye"), focus: loc("uFocus"), mode: loc("uMode"), view: loc("uView"), aspect: loc("uAspect") } };
   P.focus = DEFAULT_FOCUS;
   try { P.mode = +(localStorage.getItem("panoMode") || 0); P.focus = +(localStorage.getItem("panoFocus") || DEFAULT_FOCUS); } catch {}
 
@@ -223,18 +236,21 @@ export function open(videos, container) {
   canvas.onpointerdown = e => { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); };
   canvas.onpointermove = e => {
     if (!drag) return;
+    if (P.mode === 2) return;
     const degPerPx = P.mode ? 360 / canvas.clientWidth : P.view.fov / canvas.clientHeight;
     P.view.yaw -= (e.clientX - drag.x) * degPerPx;
     if (!P.mode) P.view.pitch = Math.max(-80, Math.min(80, P.view.pitch + (e.clientY - drag.y) * degPerPx));
     drag = { x: e.clientX, y: e.clientY };
   };
   canvas.onpointerup = () => { drag = null; };
-  canvas.onwheel = e => { e.preventDefault(); if (!P.mode) P.view.fov = Math.max(30, Math.min(120, P.view.fov * Math.exp(e.deltaY * 0.001))); };
+  canvas.onwheel = e => { e.preventDefault();
+    if (P.mode === 2) P.top = Math.max(3, Math.min(30, P.top * Math.exp(e.deltaY * 0.001)));
+    else if (!P.mode) P.view.fov = Math.max(30, Math.min(120, P.view.fov * Math.exp(e.deltaY * 0.001))); };
 }
 
 function syncButtons() {
   P.overlay.querySelectorAll("[data-m]").forEach(b => b.classList.toggle("on", +b.dataset.m === P.mode));
-  P.overlay.querySelector(".pano-hint").textContent = P.mode ? "Drag sideways to turn the panorama" : "Drag to look around · scroll to zoom";
+  P.overlay.querySelector(".pano-hint").textContent = ["Drag to look around · scroll to zoom", "Drag sideways to turn the panorama", "Scroll to zoom"][P.mode];
 }
 
 function saveCalib() { try { localStorage.setItem(STORE, JSON.stringify({ base: baseId, cams: calib })); } catch {} }
@@ -295,6 +311,7 @@ export function render() {
   gl.uniform1f(P.loc.focus, P.focus);
   gl.uniform1i(P.loc.mode, P.mode);
   gl.uniform3f(P.loc.view, P.view.yaw * Math.PI / 180, P.view.pitch * Math.PI / 180, P.view.fov * Math.PI / 180);
+  gl.uniform1f(P.loc.dist, P.top);
   gl.uniform1f(P.loc.aspect, W / H);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
