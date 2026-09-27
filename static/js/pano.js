@@ -4,20 +4,22 @@
 // Camera model (Kannala-Brandt): a ray at angle th from a camera's optical axis
 // lands f*(th + k1*th^3 + k2*th^5) image-widths from the image centre.
 // Orientation is yaw (+ = right), pitch (+ = up), roll. Car frame: x right, y up, z forward.
-import { CAMS } from "./util.js";
+import { CAMS, esc } from "./util.js";
 
-// Solved from this car's footage by bundle adjustment: scenery tracked within each
-// camera as the car moves (motion from telemetry) plus scenery shared by
-// neighbouring cameras. Positions (metres; x right, height, z forward from the rear
-// axle) were placed on Tesla's Model 3 model and only refined a few cm.
-// Orientation and lens are adjustable in the Calibrate panel (saved per browser).
+// Measured on a 2026 Model 3 (HW4). Orientations come from grid lines painted on a garage
+// floor, marked by hand in every camera, together with the direction the car travels in
+// each camera's view while driving (optical flow). Lenses and the cameras' shared view of
+// scenery come from bundle adjustment over ordinary drives. Positions (metres; x right,
+// height, z forward from the rear axle) were placed on a 3D model of the car, the side
+// repeaters checked against the car body they see. The Calibrate panel fits these to
+// another car from its own drives, or adjusts them by hand (saved per browser).
 const DEFAULT_CALIB = {
-  front:          { yaw: -0.9,   pitch: -0.1,  roll: 1.3,  f: 1.2277, k1: 0.0647,  k2: 0.0679,  pos: [0.005, 1.287, 1.811] },
-  left_pillar:    { yaw: -67.5,  pitch: -5.3,  roll: -0.4, f: 0.7104, k1: -0.0941, k2: -0.0300, pos: [-0.733, 1.257, 1.037] },
-  right_pillar:   { yaw: 66.4,   pitch: -5.3,  roll: -0.3, f: 0.6819, k1: -0.0879, k2: -0.0156, pos: [0.734, 1.223, 1.045] },
-  left_repeater:  { yaw: -142.6, pitch: -2.4,  roll: 1.3,  f: 0.7375, k1: -0.1500, k2: 0.0326,  pos: [-0.876, 0.719, 2.493] },
-  right_repeater: { yaw: 143.4,  pitch: -2.5,  roll: 1.0,  f: 0.7278, k1: -0.1437, k2: 0.0084,  pos: [0.852, 0.738, 2.469] },
-  back:           { yaw: 181.1,  pitch: -32.2, roll: 1.4,  f: 0.3196, k1: 0.0144,  k2: -0.0094, pos: [-0.037, 0.859, -0.890] },
+  front:          { yaw: -0.03,   pitch: -0.36,  roll: 0.74,  f: 1.2277, k1: 0.0647,  k2: 0.0679,  pos: [0.005, 1.287, 1.811] },
+  left_pillar:    { yaw: -70.30,  pitch: -3.65,  roll: -1.07, f: 0.7271, k1: -0.0663, k2: -0.0300, pos: [-0.733, 1.257, 1.037] },
+  right_pillar:   { yaw: 70.84,   pitch: -3.87,  roll: 0.53,  f: 0.7271, k1: -0.0663, k2: -0.0300, pos: [0.734, 1.223, 1.045] },
+  left_repeater:  { yaw: -141.32, pitch: -2.25,  roll: 2.57,  f: 0.7206, k1: -0.1526, k2: 0.0326,  pos: [-0.896, 0.719, 2.493] },
+  right_repeater: { yaw: 141.33,  pitch: -2.85,  roll: 0.32,  f: 0.7206, k1: -0.1526, k2: 0.0326,  pos: [0.897, 0.738, 2.469] },
+  back:           { yaw: 180.48,  pitch: -32.39, roll: 1.37,  f: 0.3196, k1: 0.0144,  k2: -0.0094, pos: [-0.037, 0.859, -0.890] },
 };
 // The 360 view looks out from the middle of the car. Scenery is projected onto a
 // "bowl": the road as a flat floor, then a wall at the focus distance. Things on the
