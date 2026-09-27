@@ -1,7 +1,11 @@
 # Glovebox
 
 Watch your Tesla's dashcam and Sentry recordings on your computer, straight from
-the car's USB drive:
+the car's USB drive.
+
+![All six cameras playing in sync, with speed, pedals, steering and Self-Driving from the car's own data, and a map that follows along](docs/player.jpg)
+
+What you get:
 
 - all six cameras playing together, in sync;
 - speed, pedals, steering, indicators and Autopilot from the car's own data;
@@ -9,6 +13,12 @@ the car's USB drive:
 - a 360° view that stitches the cameras into one picture around the car, including
   a view from straight above with the front wheels turning as you steered;
 - deleting recordings you don't want to keep.
+
+<p align="center">
+  <img src="docs/360.jpg" width="57%" alt="The 360° view looking back over the rear quarter: the side and rear cameras stitched into one picture">
+  <img src="docs/top-down.webp" width="39%" alt="The view from straight above while pulling out of a lane: the road turns under the car and the front wheels steer">
+</p>
+<p align="center"><em>Left: look around in 360°. Right: the view from above, front wheels steering as the car did.</em></p>
 
 Everything runs on your own computer. Your recordings are never uploaded.
 
@@ -64,7 +74,12 @@ Click a recording on the left to play it.
 | M | Show or hide the follow map |
 | Delete | Delete the recording from the USB drive (asks first) |
 
-The **Map** button at the top of the list shows all your recordings on a map.
+The **Map** button at the top of the list shows all your recordings on a map,
+coloured by speed:
+
+![Recordings drawn on a map of Melbourne, coloured by speed](docs/map.jpg)
+
+<sub>In these screenshots place names, street names and the GPS position are blurred or hidden, and the map shows made-up drives.</sub>
 
 ## Fit the 360° view to your car
 
@@ -114,6 +129,7 @@ clip.
 | `static/cars/` | pictures of each car from above, for the Top down view |
 | `tools/calibration/` | the camera calibration behind **Calibrate from my drives** |
 | `requirements.txt` | numpy, scipy and OpenCV, needed only for calibration |
+| `docs/` | the screenshots in this README |
 
 The 360° view needs to know where each camera sits on the car, which way it points
 and how its lens bends the picture. The built-in values in `static/js/pano.js` were
