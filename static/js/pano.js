@@ -385,8 +385,8 @@ async function pollFit() {
 }
 
 // Draw the current video frames. Called every animation frame while open.
-// Top down: pictures of the car from above (static/cars, made locally from 3D models of each car; the
-// viewer draws a plain box without them). The car is whichever the calibration was made for.
+// Top down: pictures of the car from above (static/cars, rendered from 3D models of each car; a plain
+// box for a car without one). The car is whichever the calibration was made for.
 const STEER_RATIO = { model_s_2021_hw4: 12.5, model_x_2021_hw4: 12.5, cybertruck_hw4: 12 };  // others about 10.5:1
 // Fetched once per page and kept: while six videos stream they take all the browser's connections to
 // the viewer, so fetching the pictures again on each opening could wait a long time.
