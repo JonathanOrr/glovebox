@@ -24,13 +24,8 @@ VEHICLES = os.path.join(HERE, "vehicles")
 
 
 def default_teslacam():
-    user = os.environ.get("USER", "")
-    for base in (f"/run/media/{user}", f"/media/{user}", "/media", "/mnt"):
-        if os.path.isdir(base):
-            for d in sorted(os.listdir(base)):
-                if os.path.isdir(os.path.join(base, d, "TeslaCam")):
-                    return os.path.join(base, d, "TeslaCam")
-    return None
+    from server import find_teslacam  # the viewer's own search: USB drives on Linux, macOS and Windows
+    return find_teslacam()
 
 
 def rotations(yaw, pitch, roll):

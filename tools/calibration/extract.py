@@ -12,13 +12,14 @@ matching scenery between neighbouring cameras.
 Usage: python3 extract.py [/path/to/TeslaCam] [--work DIR] [--hours 8-17]
 """
 import argparse
+import bisect
+import functools
 import glob
 import json
 import os
 import random
 import re
 import shutil
-import subprocess
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
@@ -29,6 +30,7 @@ import telemetry
 
 GAP, TURN_GAP = 6, 18   # frames between the two instants of a moment (sharp turns: longer)
 SCAN_STEP = 3           # read telemetry for every 3rd frame (the gaps must be multiples)
+FPS = 36
 TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{2})-\d{2}-\d{2}-front\.mp4$")
 
 
@@ -62,6 +64,35 @@ def scan_clip(path):
         if m and abs(m["dh"]) > 3:
             out.append(("sharp", m))
     return out
+
+
+@functools.cache
+def frame_times(path):
+    """Each frame's time in a clip (seconds from the file's start), or None if unreadable."""
+    try:
+        with open(path, "rb") as f:
+            times, end = telemetry._sample_table(telemetry._read_moov(f))[2:]
+        return times + [end]  # the last entry is where the file ends
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def save_frames(clip, wanted):
+    """Save frames of one clip, given as [(frame index, output file)]."""
+    cv2.setNumThreads(2)
+    cap = cv2.VideoCapture(clip)
+    pos = None
+    for k, out in sorted(wanted):
+        if pos is None or not 0 <= k - pos < 40:  # seek, or read on if it's just ahead
+            cap.set(cv2.CAP_PROP_POS_FRAMES, k)
+            pos = k
+        while pos < k and cap.grab():
+            pos += 1
+        ok, img = cap.read()
+        pos += 1
+        if ok and pos - 1 == k:
+            cv2.imwrite(out, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    cap.release()
 
 
 def main():
@@ -105,28 +136,39 @@ def main():
     frames = os.path.join(args.work, "frames")
     shutil.rmtree(frames, ignore_errors=True)
     os.makedirs(frames)
-    jobs = []
+    # The six files of a minute end at the same instant but start up to half a second
+    # apart, so the front camera's file time t is file time t + (its duration - the
+    # front's) in another camera. Every camera is read at the same real instants.
+    jobs = {}  # clip -> [(frame index, output file)]
     for i, p in enumerate(picks):
         p["id"] = i
+        front = frame_times(p["clip"])
         for c in cams:
             src = p["clip"].replace("-front.mp4", f"-{c}.mp4")
+            times = frame_times(src)
+            if not front or not times:
+                continue
+            lag = times[-1] - front[-1]
             for which in ("t1", "t2"):
-                jobs.append(["ffmpeg", "-v", "error", "-y", "-ss", f"{p[which]:.4f}", "-i", src, "-frames:v", "1",
-                             os.path.join(frames, f"{i}-{c}-{which}.png")])
-    print(f"extracting {len(jobs)} frames ...", flush=True)
+                t = p[which] + lag
+                k = bisect.bisect_left(times, t, hi=len(times) - 1)
+                k = min((j for j in (k - 1, k) if 0 <= j < len(times) - 1), key=lambda j: abs(times[j] - t), default=None)
+                if k is not None and abs(times[k] - t) < 1 / FPS:  # the nearest frame, if the camera has one then
+                    jobs.setdefault(src, []).append((k, os.path.join(frames, f"{i}-{c}-{which}.jpg")))
+    print(f"extracting {sum(map(len, jobs.values()))} frames ...", flush=True)
     with ThreadPoolExecutor(8) as ex:
-        list(ex.map(lambda j: subprocess.run(j, check=False), jobs))
+        list(ex.map(lambda j: save_frames(*j), jobs.items()))
 
     # Drop moments with a missing frame (e.g. past the end of a camera's clip) and dark
     # ones (dusk, car parks, tunnels), which have too few features to match.
     kept = []
     for p in picks:
-        paths = [os.path.join(frames, f"{p['id']}-{c}-{w}.png") for c in cams for w in ("t1", "t2")]
+        paths = [os.path.join(frames, f"{p['id']}-{c}-{w}.jpg") for c in cams for w in ("t1", "t2")]
         img = cv2.imread(paths[0], cv2.IMREAD_GRAYSCALE) if all(map(os.path.exists, paths)) else None
         if img is not None and img.mean() > 60:
             kept.append(p)
         else:
-            for f in glob.glob(os.path.join(frames, f"{p['id']}-*.png")):
+            for f in glob.glob(os.path.join(frames, f"{p['id']}-*.jpg")):
                 os.remove(f)
     with open(os.path.join(args.work, "moments.json"), "w") as fh:
         json.dump({"cameras": cams, "moments": kept}, fh, indent=0)

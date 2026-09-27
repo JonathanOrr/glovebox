@@ -43,8 +43,8 @@ def good_matches(fa, fb, ratio):
 def temporal(job):
     cam, mid = job
     cv2.setNumThreads(1)
-    f1 = features(f"{FRAMES}/{mid}-{cam}-t1.png")
-    a, b = good_matches(f1, features(f"{FRAMES}/{mid}-{cam}-t2.png"), 0.7)
+    f1 = features(f"{FRAMES}/{mid}-{cam}-t1.jpg")
+    a, b = good_matches(f1, features(f"{FRAMES}/{mid}-{cam}-t2.jpg"), 0.7)
     if a is None or len(a) < 15:
         return None
     s = f1[2]  # pixel thresholds at the scale features were found at
@@ -62,7 +62,7 @@ def temporal(job):
 def cross(job):
     (ca, cb), mid = job
     cv2.setNumThreads(1)
-    a, b = good_matches(features(f"{FRAMES}/{mid}-{ca}-t1.png"), features(f"{FRAMES}/{mid}-{cb}-t1.png"), 0.75)
+    a, b = good_matches(features(f"{FRAMES}/{mid}-{ca}-t1.jpg"), features(f"{FRAMES}/{mid}-{cb}-t1.jpg"), 0.75)
     if a is None or len(a) < 12:
         return None
     F, mask = cv2.findFundamentalMat(a, b, cv2.FM_RANSAC, 2.0, 0.999)
@@ -95,7 +95,7 @@ def main():
     frames = os.path.join(args.work, "frames")
     with Pool(args.procs, initializer=init, initargs=(frames,)) as pool:
         res = [r for r in pool.imap_unordered(run, jobs, chunksize=4) if r]
-    frames_of = lambda c: cv2.imread(os.path.join(frames, f"{moments[0]['id']}-{c}-t1.png"), cv2.IMREAD_GRAYSCALE).shape
+    frames_of = lambda c: cv2.imread(os.path.join(frames, f"{moments[0]['id']}-{c}-t1.jpg"), cv2.IMREAD_GRAYSCALE).shape
     out = {"cameras": cams, "sizes": {c: (frames_of(c)[1], frames_of(c)[0]) for c in cams},
            "temporal": {c: [] for c in cams}, "cross": {p: [] for p in pairs}}
     for kind, key, mid, a, b in res:

@@ -2,27 +2,28 @@
 
 The viewer's 360° view stitches the six dashcam videos together. To do that it
 needs to know where each camera is on the car, which way it points, and how its
-lens bends the picture. The built-in values in `static/js/pano.js` were solved
-from one HW4 Model 3, a 2026 Highland. Mounting and lenses vary a little from car
-to car, and other models put their cameras elsewhere, so these scripts let you
-solve them again from your own footage. That matters most for earlier HW4 cars:
-Tesla changed the camera sensor in 2025 (IMX963 before, IMX00N after), so their
-lenses may differ from the built-in values. You don't need a trip to the car:
-the scripts use ordinary drives on the USB stick.
+lens bends the picture. The built-in values in `static/js/pano.js` were measured on
+one 2026 Model 3 (HW4). Mounting and lenses vary a little from car to car, and
+other models put their cameras elsewhere, so these scripts solve them again from
+your own footage. You don't need a trip to the car: they use ordinary drives on
+the USB stick.
+
+The easiest way to run them is the **Calibrate from my drives** button in the
+viewer (360° view, then Calibrate), which runs all three steps below. This page
+is for running them by hand, and for how they work.
 
 ## What you need
 
 - A TeslaCam USB drive with some daytime driving in `SavedClips`, `SentryClips`
   or `RecentClips`. A few saved drives through town work well, because turns help.
-- `ffmpeg` on your PATH.
-- Python 3.10+ with `pip install -r requirements.txt` (numpy, scipy, OpenCV). A
-  venv works fine.
+- Python 3.10+ with `pip install -r requirements.txt` from the project folder
+  (numpy, scipy, OpenCV). The start files set this up for you.
 
 ## Run it
 
 ```sh
 cd tools/calibration
-python3 extract.py            # ~1 min: picks ~80 moments and saves their frames to work/
+python3 extract.py            # ~30 s: picks ~80 moments and saves their frames to work/
 python3 match.py              # ~1 min: finds the same scenery across frames (uses all CPU cores)
 python3 solve.py              # ~2 min: solves all cameras, writes ../../calibration.json
 ```
@@ -31,7 +32,7 @@ python3 solve.py              # ~2 min: solves all cameras, writes ../../calibra
 file, e.g. `python3 solve.py --vehicle model_y_juniper_hw4` (see
 [Vehicles](#vehicles)).
 
-`extract.py` finds the TeslaCam folder on a mounted drive automatically; pass
+`extract.py` finds the TeslaCam folder on a plugged-in drive automatically; pass
 the path if it doesn't. Reload the viewer and the 360° view uses
 `calibration.json`. Delete that file to go back to the built-in values. Any
 slider tweaks in the Calibrate panel are saved in your browser on top of the
@@ -50,6 +51,11 @@ probably wasn't enough daytime driving. Try `extract.py --hours 7-19` or
    saves every recorded camera's frames at both instants, plus how far the car
    moved and turned in between. It works out which cameras the car records
    from the clips, since HW3 cars may record fewer than HW4.
+
+   The six files of a minute end at the same instant, but each camera starts
+   recording at its own keyframe, up to half a second apart. So each camera's
+   frame is taken at the front camera's file time plus the difference in file
+   durations, which puts every camera at the same real instant.
 2. **match.py** finds the same scenery points (SIFT features, checked with
    RANSAC):
    - within each camera across the two instants;
@@ -146,6 +152,13 @@ only read, never saved.
    adjust if needed.
 
 ## Limits
+
+- **The pillar cameras are the least certain.** Each one shares scenery with
+  only one other camera, so the solve can trade a little of its aim against its
+  lens. On the car the built-in values were measured on, a solve from drives
+  alone lands within about 5° of the careful measurement. That car's built-in
+  values are better than what a solve gives, so Model 3 owners should try them
+  first.
 
 - **On the Model 3, the front camera and the pillar cameras don't overlap.**
   There is a real blind spot between them, so that seam can't be checked

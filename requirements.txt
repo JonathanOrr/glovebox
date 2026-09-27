@@ -1,0 +1,4 @@
+# Only needed to calibrate the 360° view for your car; the viewer itself uses plain Python.
+numpy
+scipy
+opencv-python-headless
