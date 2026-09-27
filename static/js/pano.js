@@ -36,10 +36,10 @@ const ORDER = CAMS.map(([c]) => c);
 const LABELS = Object.fromEntries(CAMS);
 const FRONT_BOOST = 1.6;  // prefer the sharper front camera where views overlap
 
-// A calibration.json from tools/calibration (served by /api/calibration) replaces
-// the built-in values. Slider tweaks are saved per browser on top of whichever
+// A calibration.json made for this car (by the Calibrate panel, or tools/calibration)
+// replaces the built-in values. Slider tweaks are saved per browser on top of whichever
 // calibration they were made against, and dropped when that calibration changes.
-let base = structuredClone(DEFAULT_CALIB), baseId = null;
+let base = structuredClone(DEFAULT_CALIB), baseId = null, calibInfo = {};
 let calib = structuredClone(DEFAULT_CALIB);
 const STORE = "panoCalib4";   // { base: calibration.json id or null, cams }
 const OLD_STORE = "panoCalib3";
@@ -50,14 +50,19 @@ function applyStored() {
     if (s.base === baseId) for (const cam of ORDER) if (s.cams?.[cam]) calib[cam] = { ...calib[cam], ...s.cams[cam] };
   } catch {}
 }
+function loadCalibration() {
+  return fetch("/api/calibration").then(r => r.json()).then(j => {
+    calibInfo = j;
+    base = structuredClone(DEFAULT_CALIB);
+    eye = EYE;
+    for (const cam of ORDER) if (j.cameras?.[cam]) base[cam] = { ...base[cam], ...j.cameras[cam] };
+    if (Array.isArray(j.cameras?.eye) && j.cameras.eye.length === 3) eye = j.cameras.eye;
+    baseId = j.id ?? null;
+    applyStored();
+  }).catch(() => {});
+}
 applyStored();
-fetch("/api/calibration").then(r => r.json()).then(j => {
-  if (!j.cameras) return;
-  for (const cam of ORDER) if (j.cameras[cam]) base[cam] = { ...base[cam], ...j.cameras[cam] };
-  if (Array.isArray(j.cameras.eye) && j.cameras.eye.length === 3) eye = j.cameras.eye;
-  baseId = j.id;
-  applyStored();
-}).catch(() => {});
+loadCalibration();
 
 const VERT = `#version 300 es
 in vec2 aPos; out vec2 vUv;
@@ -257,17 +262,23 @@ function syncButtons() {
 
 function saveCalib() { try { localStorage.setItem(STORE, JSON.stringify({ base: baseId, cams: calib })); } catch {} }
 
-// Sliders for one camera's orientation and lens.
+// The Calibrate panel: fitting the cameras to this car from its own drives (run by the
+// server in the background), and sliders for one camera's orientation and lens.
 function renderCalib(cam) {
   const el = P.overlay.querySelector(".calib");
+  P.calibCam = cam;
   const c = calib[cam];
   const rows = [["yaw", "Yaw", -200, 200, 0.5, c.yaw], ["pitch", "Pitch", -45, 45, 0.5, c.pitch], ["roll", "Roll", -30, 30, 0.5, c.roll],
                 ["hfov", "Field of view", 30, 200, 1, hfovOf(c)], ["k1", "Distortion", -0.3, 0.5, 0.005, c.k1],
                 ["k2", "Edge distortion", -0.1, 0.1, 0.002, c.k2 || 0]];
-  el.innerHTML = `<div class="cams">${ORDER.map(k => `<button data-c="${k}" class="${k === cam ? "on" : ""}">${LABELS[k]}</button>`).join("")}</div>` +
+  el.innerHTML = `<div class="fit"></div>
+    <details class="hand" ${P.handOpen ? "open" : ""}><summary>Adjust by hand</summary>
+    <div class="cams">${ORDER.map(k => `<button data-c="${k}" class="${k === cam ? "on" : ""}">${LABELS[k]}</button>`).join("")}</div>` +
     rows.map(([k, l, lo, hi, st, v]) => `<label>${l}<input type="range" data-k="${k}" min="${lo}" max="${hi}" step="${st}" value="${v}"><span>${(+v).toFixed(k[0] === "k" ? 3 : 1)}</span></label>`).join("") +
     `<div class="row"><button data-a="reset">Reset camera</button><button data-a="copy">Copy all</button></div>
-     <div class="note">Distortion bends the image toward the edges (0 = fisheye, 0.33 ≈ normal lens). Line up distant scenery across seams.</div>`;
+     <div class="note">Distortion bends the image toward the edges (0 = fisheye, 0.33 ≈ normal lens). Line up distant scenery across seams.</div>
+    </details>`;
+  el.querySelector(".hand").ontoggle = e => { P.handOpen = e.target.open; };
   el.querySelectorAll("[data-c]").forEach(b => b.onclick = () => renderCalib(b.dataset.c));
   el.querySelectorAll("input").forEach(inp => inp.oninput = () => {
     const v = +inp.value, k = inp.dataset.k;
@@ -279,6 +290,65 @@ function renderCalib(cam) {
   });
   el.querySelector("[data-a=reset]").onclick = () => { calib[cam] = structuredClone(base[cam]); saveCalib(); renderCalib(cam); };
   el.querySelector("[data-a=copy]").onclick = () => navigator.clipboard?.writeText(JSON.stringify(calib, null, 1));
+  renderFit();
+  pollFit();
+}
+
+function renderFit() {
+  const el = P?.overlay.querySelector(".fit");
+  if (!el) return;
+  const job = P.fit || {}, vehicles = job.vehicles || [];
+  const made = calibInfo.cameras;
+  const car = vehicles.find(v => v.name === made?.vehicle);
+  let chosen = P.vehicle;
+  try { chosen ??= localStorage.getItem("calibVehicle"); } catch {}
+  chosen ??= car?.id ?? "model_3_highland_hw4";
+  const date = made && calibInfo.date ? new Date(calibInfo.date).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
+  const msg = job.running ? `Step ${job.step + 1} of ${job.steps}: ${esc(job.message)}…`
+    : job.error ? `<span class="err">${esc(job.error)}</span>`
+    : job.justDone ? "Done. The 360° view now uses the new calibration." : "";
+  el.innerHTML = `<div class="fit-title">Fit to your car</div>
+    <div class="note">${made ? `Calibrated for ${made.vehicle ? esc(made.vehicle) : "this car"}${date ? ` on ${date}` : ""}.`
+                              : "Using the built-in calibration, measured on a 2026 Model 3. On one of those it probably fits already."}</div>
+    <label class="car">Car <select ${job.running ? "disabled" : ""}>${vehicles.map(v =>
+      `<option value="${esc(v.id)}" ${v.id === chosen ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></label>
+    <button data-a="fit" class="go" ${job.running || !vehicles.length ? "disabled" : ""}>${job.running ? "Calibrating…" : "Calibrate from my drives"}</button>
+    ${msg ? `<div class="fit-msg">${msg}</div>` : ""}
+    <div class="note">Uses daytime drives on the USB drive and takes about five minutes. You can keep watching meanwhile.</div>
+    ${!job.running && (calibInfo.previous || made) ? `<div class="row">
+      ${calibInfo.previous ? `<button data-a="undo">Undo last change</button>` : ""}
+      ${made ? `<button data-a="builtin">Use built-in values</button>` : ""}</div>` : ""}`;
+  const sel = el.querySelector("select");
+  sel.onchange = () => { P.vehicle = sel.value; try { localStorage.setItem("calibVehicle", sel.value); } catch {} };
+  el.querySelector("[data-a=fit]").onclick = async () => {
+    const r = await (await fetch("/api/calibrate", { method: "POST", body: JSON.stringify({ vehicle: sel.value }) })).json();
+    P.fit = { ...job, ...(r.error ? { error: r.error } : { running: true, step: 0, steps: 3, message: "Starting" }) };
+    renderFit();
+    pollFit();
+  };
+  const change = what => async () => {
+    await fetch(`/api/calibration/${what}`, { method: "POST" });
+    await loadCalibration();
+    if (P) { P.fit = { vehicles }; renderCalib(P.calibCam); }
+  };
+  el.querySelector("[data-a=undo]")?.addEventListener("click", change("undo"));
+  el.querySelector("[data-a=builtin]")?.addEventListener("click", change("reset"));
+}
+
+// Follow a calibration run on the server; when it finishes, switch to its result.
+async function pollFit() {
+  clearTimeout(P.fitTimer);
+  let job;
+  try { job = await (await fetch("/api/calibrate")).json(); } catch { return; }
+  if (!P?.gl) return;
+  const finished = P.fit?.running && !job.running;
+  P.fit = { ...job, justDone: finished || (P.fit?.justDone && !job.running && !job.error) };
+  if (finished) {
+    await loadCalibration();
+    if (!P) return;
+    if (!P.overlay.querySelector(".calib").hidden) renderCalib(P.calibCam);
+  } else renderFit();
+  if (job.running) P.fitTimer = setTimeout(pollFit, 1500);
 }
 
 // Draw the current video frames. Called every animation frame while open.
@@ -325,6 +395,7 @@ export const isOpen = () => !!P;
 
 export function close() {
   if (!P) return;
+  clearTimeout(P.fitTimer);
   P.gl?.getExtension("WEBGL_lose_context")?.loseContext();
   P.canvas.remove(); P.overlay.remove();
   P = null;

@@ -2,8 +2,10 @@
 models/
 # Per-car calibration output and scratch data
 calibration.json
+calibration.previous.json
+calibration.json.swap
 tools/calibration/work/
 __pycache__/
 *.blend1
-# Python environment (PyTorch on ROCm), several GB
+# A local Python environment, if you make one
 .venv/

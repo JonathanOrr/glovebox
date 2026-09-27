@@ -6,9 +6,16 @@ import * as player from "./player.js";
 import * as mapView from "./map.js";
 
 async function loadEvents() {
-  const res = await fetch("/api/events");
-  const data = await res.json();
-  if (data.error) { $("#summary").textContent = data.error; return; }
+  let data;
+  try { data = await (await fetch("/api/events")).json(); }
+  catch { data = { waiting: true, error: "The viewer has stopped. Start it again with the Start file." }; }
+  if (data.error) {
+    // No drive yet (or it was unplugged): say so, and look again every few seconds.
+    $("#summary").textContent = "";
+    $("#main").innerHTML = `<div class="empty"><div class="waiting">${esc(data.error)}</div></div>`;
+    if (data.waiting) setTimeout(loadEvents, 3000);
+    return;
+  }
   state.events = data.events;
   renderList();
   $("#views").querySelectorAll("button").forEach(b => b.onclick = () => setView(b.dataset.v));

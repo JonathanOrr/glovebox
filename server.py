@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Local TeslaCam viewer: synced 6-camera playback, telemetry, and delete.
+"""Local TeslaCam viewer: synced 6-camera playback, telemetry, delete, and camera calibration.
 
 Usage: python3 server.py [/path/to/TeslaCam] [--port 8765]
 """
 import argparse
+import importlib.util
 import json
 import mimetypes
 import os
 import re
 import shutil
+import string
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -27,28 +30,47 @@ CLIP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})-(\w+)\.mp4$")
 NAME_RE = re.compile(r"^[\w.-]+$")
 RANGE_CHUNK = 4 << 20
 
-ROOT = ""  # set in main()
+CALIB_TOOLS = os.path.join(HERE, "tools", "calibration")
+CALIB_FILE = os.path.join(HERE, "calibration.json")
+CALIB_PREVIOUS = os.path.join(HERE, "calibration.previous.json")
+
+ROOT = ""  # a TeslaCam folder given on the command line; otherwise found on a drive
 _telemetry_cache = {}
 _track_cache = {}
 _duration_cache = {}
 _cache_lock = threading.Lock()
 
 
-def default_root():
+def find_teslacam():
+    """The TeslaCam folder on a plugged-in USB drive (Linux, macOS or Windows), or a copy in the home folder."""
     user = os.environ.get("USER", "")
-    for base in (f"/run/media/{user}", f"/media/{user}", "/media", "/mnt"):
+    places = []
+    for base in (f"/run/media/{user}", f"/media/{user}", "/media", "/mnt", "/Volumes"):
         if os.path.isdir(base):
-            for d in sorted(os.listdir(base)):
-                cand = os.path.join(base, d, "TeslaCam")
-                if os.path.isdir(cand):
-                    return cand
+            places += [os.path.join(base, d) for d in sorted(os.listdir(base))]
+    if os.name == "nt":
+        places += [f"{d}:\\" for d in string.ascii_uppercase[2:]]
+    home = os.path.expanduser("~")
+    places += [home, os.path.join(home, "Desktop"), os.path.join(home, "Downloads")]
+    for p in places:
+        cand = os.path.join(p, "TeslaCam")
+        if os.path.isdir(cand):
+            return cand
     return None
+
+
+def teslacam():
+    """The folder to show: the one given on the command line, else whichever drive is plugged in now."""
+    return ROOT or find_teslacam()
 
 
 def event_dir(source, event):
     if source not in SOURCES or not NAME_RE.match(event) or event.startswith("."):
         return None
-    path = os.path.join(ROOT, source, event)
+    root = teslacam()
+    if not root:
+        return None
+    path = os.path.join(root, source, event)
     return path if os.path.isdir(path) else None
 
 
@@ -103,10 +125,10 @@ def event_segments(d):
     return datetime.fromtimestamp(t0), segs
 
 
-def list_events():
+def list_events(root):
     events = []
     for source in SOURCES:
-        src = os.path.join(ROOT, source)
+        src = os.path.join(root, source)
         if not os.path.isdir(src):
             continue
         for name in sorted(os.listdir(src), reverse=True):
@@ -183,6 +205,81 @@ def event_track(d):
     return points
 
 
+def vehicles():
+    out = []
+    for fn in sorted(os.listdir(os.path.join(CALIB_TOOLS, "vehicles"))):
+        if fn.endswith(".json"):
+            with open(os.path.join(CALIB_TOOLS, "vehicles", fn)) as f:
+                out.append({"id": fn[:-5], "name": json.load(f)["name"]})
+    return out
+
+
+class Calibration:
+    """Runs tools/calibration's three steps in the background, one run at a time."""
+    STEPS = [("extract.py", "Picking moments from your drives"), ("match.py", "Finding the same scenery in each camera"),
+             ("solve.py", "Working out where each camera points")]
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.status = {"running": False}
+
+    def start(self, root, vehicle):
+        missing = [m for m in ("numpy", "scipy", "cv2") if importlib.util.find_spec(m) is None]
+        if missing:
+            return "Calibration needs a few extra parts. Close this window and start the viewer with the Start file."
+        if not root:
+            return "Plug in the USB drive from your car first."
+        if vehicle not in {v["id"] for v in vehicles()}:
+            return "Unknown car."
+        with self.lock:
+            if self.status["running"]:
+                return "Already calibrating."
+            self.status = {"running": True, "step": 0, "steps": len(self.STEPS), "message": self.STEPS[0][1]}
+        threading.Thread(target=self.run, args=(root, vehicle), daemon=True).start()
+        return None
+
+    def run(self, root, vehicle):
+        work = os.path.join(CALIB_TOOLS, "work")
+        out = os.path.join(work, "calibration.json")
+        args = {"extract.py": [root], "match.py": [], "solve.py": ["--vehicle", vehicle, "--out", out]}
+        for i, (script, message) in enumerate(self.STEPS):
+            with self.lock:
+                self.status.update(step=i, message=message)
+            p = subprocess.run([sys.executable, os.path.join(CALIB_TOOLS, script), "--work", work, *args[script]],
+                               cwd=CALIB_TOOLS, capture_output=True, text=True)
+            if p.returncode:
+                lines = (p.stderr or p.stdout).strip().splitlines()
+                with self.lock:
+                    self.status = {"running": False, "error": friendly_error(lines[-1] if lines else "")}
+                return
+        shutil.rmtree(os.path.join(work, "frames"), ignore_errors=True)  # a few hundred MB, no longer needed
+        if os.path.exists(CALIB_FILE):
+            os.replace(CALIB_FILE, CALIB_PREVIOUS)
+        os.replace(out, CALIB_FILE)
+        with self.lock:
+            self.status = {"running": False, "done": True}
+
+
+def friendly_error(line):
+    if "no daytime clips" in line or "no driving found" in line or "no matches for" in line:
+        return ("Not enough daytime driving on the USB drive. Save a few drives in daylight "
+                "(tap the dashcam icon while driving), then try again.")
+    return f"Calibration stopped: {line or 'unknown error'}"
+
+
+CALIBRATION = Calibration()
+
+
+def calibration_info():
+    info = {"previous": os.path.isfile(CALIB_PREVIOUS)}
+    if os.path.isfile(CALIB_FILE):
+        info["id"] = str(os.path.getmtime(CALIB_FILE))
+        info["date"] = datetime.fromtimestamp(os.path.getmtime(CALIB_FILE)).isoformat(timespec="seconds")
+        with open(CALIB_FILE) as f:
+            info["cameras"] = json.load(f)
+    return info
+
+
 class Handler(SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         if os.environ.get("TC_DEBUG"):
@@ -202,9 +299,11 @@ class Handler(SimpleHTTPRequestHandler):
         if url.path == "/":
             return self.send_file(os.path.join(STATIC, "index.html"))
         if url.path == "/api/events":
-            if not os.path.isdir(ROOT):
-                return self.send_json({"error": f"TeslaCam folder not found: {ROOT}"}, 404)
-            return self.send_json({"root": ROOT, "events": list_events()})
+            root = teslacam()
+            if not root or not os.path.isdir(root):
+                return self.send_json({"waiting": True, "error": f"Can't find {ROOT}" if ROOT else
+                                       "Plug in the USB drive from your car. Its TeslaCam folder will show up here."})
+            return self.send_json({"root": root, "events": list_events(root)})
         if url.path == "/api/track":
             d = event_dir(q.get("source", ""), q.get("event", ""))
             if not d:
@@ -220,15 +319,14 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "not found"}, 404)
             return self.send_json(clip_telemetry(path))
         if url.path == "/api/calibration":
-            # Written by tools/calibration/solve.py; the 360° view uses built-in values without it.
-            path = os.path.join(HERE, "calibration.json")
-            if not os.path.isfile(path):
-                return self.send_json({})
+            # calibration.json is written by tools/calibration/solve.py; without it the 360° view uses built-in values.
             try:
-                with open(path) as f:
-                    return self.send_json({"id": str(os.path.getmtime(path)), "cameras": json.load(f)})
+                return self.send_json(calibration_info())
             except (OSError, ValueError) as e:
                 return self.send_json({"error": f"calibration.json: {e}"}, 500)
+        if url.path == "/api/calibrate":
+            with CALIBRATION.lock:
+                return self.send_json({**CALIBRATION.status, "vehicles": vehicles()})
         m = re.match(r"^/file/(\w+)/([^/]+)/([^/]+)$", url.path)
         if m:
             d = event_dir(m.group(1), unquote(m.group(2)))
@@ -243,18 +341,36 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         url = urlparse(self.path)
-        if url.path != "/api/delete":
-            return self.send_error(404)
         length = int(self.headers.get("Content-Length", 0))
         try:
-            body = json.loads(self.rfile.read(length))
+            body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
             return self.send_json({"error": "bad json"}, 400)
-        d = event_dir(body.get("source", ""), body.get("event", ""))
-        if not d:
-            return self.send_json({"error": "event not found"}, 404)
-        shutil.rmtree(d)
-        return self.send_json({"ok": True})
+        if url.path == "/api/delete":
+            d = event_dir(body.get("source", ""), body.get("event", ""))
+            if not d:
+                return self.send_json({"error": "event not found"}, 404)
+            shutil.rmtree(d)
+            return self.send_json({"ok": True})
+        if url.path == "/api/calibrate":
+            err = CALIBRATION.start(teslacam(), body.get("vehicle", ""))
+            return self.send_json({"error": err} if err else {"ok": True}, 409 if err else 200)
+        if url.path == "/api/calibration/reset":
+            # Back to the built-in values; the current calibration is kept as the one to undo to.
+            if os.path.exists(CALIB_FILE):
+                os.replace(CALIB_FILE, CALIB_PREVIOUS)
+            return self.send_json({"ok": True})
+        if url.path == "/api/calibration/undo":
+            # Swap back to the calibration in use before the last change.
+            if os.path.exists(CALIB_PREVIOUS):
+                tmp = CALIB_FILE + ".swap"
+                if os.path.exists(CALIB_FILE):
+                    os.replace(CALIB_FILE, tmp)
+                os.replace(CALIB_PREVIOUS, CALIB_FILE)
+                if os.path.exists(tmp):
+                    os.replace(tmp, CALIB_PREVIOUS)
+            return self.send_json({"ok": True})
+        return self.send_error(404)
 
     def send_file(self, path):
         if not os.path.isfile(path):
@@ -317,19 +433,25 @@ class Server(ThreadingHTTPServer):
 def main():
     global ROOT
     ap = argparse.ArgumentParser()
-    ap.add_argument("root", nargs="?", help="path to the TeslaCam folder (auto-detected if omitted)")
+    ap.add_argument("root", nargs="?", help="path to the TeslaCam folder (found on a plugged-in drive if omitted)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
-    root = os.path.abspath(args.root) if args.root else default_root()
-    if not root:
-        raise SystemExit("Couldn't find a TeslaCam folder; pass its path as an argument.")
-    ROOT = root
-    server = Server(("127.0.0.1", args.port), Handler)
+    if args.root:
+        ROOT = os.path.abspath(args.root)
+        if os.path.isdir(os.path.join(ROOT, "TeslaCam")):  # the drive itself was given
+            ROOT = os.path.join(ROOT, "TeslaCam")
+    try:
+        server = Server(("127.0.0.1", args.port), Handler)
+    except OSError:  # already running (e.g. started twice): just show it
+        server = None
     url = f"http://127.0.0.1:{args.port}/"
-    print(f"TeslaCam viewer for {ROOT}\nOpen {url}  (Ctrl+C to stop)")
     if not args.no_browser:
         threading.Timer(0.5, webbrowser.open, [url]).start()
+    if server is None:
+        print(f"The viewer is already running at {url}")
+        return
+    print(f"TeslaCam viewer: {url}\nKeep this window open while you use it. Close it (or press Ctrl+C) to stop.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
