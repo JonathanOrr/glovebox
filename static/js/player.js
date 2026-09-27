@@ -217,7 +217,7 @@ function tick(once) {
     const x = sampleAt(cur.seg, m.currentTime);
     renderHud(cur, x);
     followMap.update(x);
-    pano.render();
+    pano.render(x?.steering_angle || 0);
   }
   if (!once) cur.raf = requestAnimationFrame(() => tick());
 }

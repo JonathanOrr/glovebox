@@ -59,6 +59,8 @@ function loadCalibration() {
     if (Array.isArray(j.cameras?.eye) && j.cameras.eye.length === 3) eye = j.cameras.eye;
     baseId = j.id ?? null;
     applyStored();
+    carPictures(j.vehicleId || "model_3_highland_hw4");  // early, before any video takes the connections
+    if (P?.gl) loadCar();  // the car picture follows the car the calibration was made for
   }).catch(() => {});
 }
 applyStored();
@@ -82,6 +84,12 @@ uniform int uMode;       // 0 = look around, 1 = panorama strip, 2 = top down (s
 uniform float uDist;     // top down: metres from the middle of the car to the top of the view
 uniform vec3 uView;      // yaw, pitch, vertical fov (radians)
 uniform float uAspect;   // canvas width / height
+// Top down: a picture of the car drawn over the road, and its front wheels turned by the steering.
+uniform sampler2D uCar, uWheelL, uWheelR;
+uniform vec4 uCarRect;   // the car picture's left, back, right and front edges (metres); none if right <= left
+uniform vec4 uWheels;    // wheelbase, half the front track, left and right wheel angles (radians, + = right)
+uniform float uWheelBox; // size of a wheel picture (metres)
+uniform float uCenter;   // distance forward of the rear axle at the middle of the view
 
 vec3 rayDir() {
   if (uMode == 1) {
@@ -111,6 +119,20 @@ vec3 bowlPoint(vec3 d) {
   return uEye + d * uFocus;
 }
 
+// A picture over what's drawn so far: straight (not premultiplied) alpha, uv (0,0) = top left.
+vec3 over(vec3 under, sampler2D tex, vec2 uv) {
+  if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return under;
+  vec4 c = texture(tex, uv);
+  return mix(under, c.rgb, c.a);
+}
+
+// A front wheel's picture at the road point g: centred on its hub, turned by angle a (+ = right).
+vec3 wheel(vec3 under, sampler2D tex, vec2 g, vec2 hub, float a) {
+  vec2 d = g - hub;
+  vec2 l = vec2(d.x * cos(a) - d.y * sin(a), d.x * sin(a) + d.y * cos(a));
+  return over(under, tex, vec2(0.5 + l.x / uWheelBox, 0.5 - l.y / uWheelBox));
+}
+
 vec4 cam(sampler2D tex, mat3 R, vec4 L, vec4 L2, vec3 pos, vec3 P) {
   if (L.w <= 0.0) return vec4(0.0);
   vec3 c = normalize(P - pos) * R;        // ray from this camera, in camera coordinates
@@ -132,10 +154,12 @@ vec4 cam(sampler2D tex, mat3 R, vec4 L, vec4 L2, vec3 pos, vec3 P) {
 
 void main() {
   vec3 d = rayDir(), P;
+  bool pic = uCarRect.z > uCarRect.x;
+  vec2 g = vec2(0.0);
   if (uMode == 2) {
     // straight down, no perspective: each pixel is a point on the road, forward is up
-    vec2 g = vec2((vUv.x - 0.5) * uAspect, vUv.y - 0.5) * 2.0 * uDist + vec2(0.0, 1.39);
-    if (all(greaterThan(g, CAR_LO)) && all(lessThan(g, CAR_HI))) {
+    g = vec2((vUv.x - 0.5) * uAspect, vUv.y - 0.5) * 2.0 * uDist + vec2(0.0, uCenter);
+    if (!pic && all(greaterThan(g, CAR_LO)) && all(lessThan(g, CAR_HI))) {
       bool bonnet = g.y > CAR_HI.y - 0.9;
       outColor = vec4(bonnet ? vec3(0.42, 0.44, 0.5) : vec3(0.3, 0.32, 0.36), 1.0); return;
     }
@@ -144,7 +168,13 @@ void main() {
   vec4 s = cam(uTex0, uRot[0], uLens[0], uLens2[0], uPos[0], P) + cam(uTex1, uRot[1], uLens[1], uLens2[1], uPos[1], P)
          + cam(uTex2, uRot[2], uLens[2], uLens2[2], uPos[2], P) + cam(uTex3, uRot[3], uLens[3], uLens2[3], uPos[3], P)
          + cam(uTex4, uRot[4], uLens[4], uLens2[4], uPos[4], P) + cam(uTex5, uRot[5], uLens[5], uLens2[5], uPos[5], P);
-  outColor = s.a > 0.0 ? vec4(s.rgb / s.a, 1.0) : vec4(0.07, 0.08, 0.1, 1.0);
+  vec3 col = s.a > 0.0 ? s.rgb / s.a : vec3(0.07, 0.08, 0.1);
+  if (uMode == 2 && pic) {
+    col = wheel(col, uWheelL, g, vec2(-uWheels.y, uWheels.x), uWheels.z);
+    col = wheel(col, uWheelR, g, vec2(uWheels.y, uWheels.x), uWheels.w);
+    col = over(col, uCar, vec2((g.x - uCarRect.x) / (uCarRect.z - uCarRect.x), (uCarRect.w - g.y) / (uCarRect.w - uCarRect.y)));
+  }
+  outColor = vec4(col, 1.0);
 }`;
 
 let P = null;  // { canvas, gl, prog, tex[], loc, videos, mode, view, overlay }
@@ -213,8 +243,11 @@ export function open(videos, container) {
   });
   const loc = n => gl.getUniformLocation(prog, n);
   P = { canvas, overlay, gl, prog, tex, videos, loaded: {}, lastTime: {}, mode: 0,
-        view: { yaw: 0, pitch: -5, fov: 90 }, top: 8, loc: { dist: loc("uDist"),  rot: loc("uRot"), lens: loc("uLens"), lens2: loc("uLens2"), pos: loc("uPos"), eye: loc("uEye"), focus: loc("uFocus"), mode: loc("uMode"), view: loc("uView"), aspect: loc("uAspect") } };
+        view: { yaw: 0, pitch: -5, fov: 90 }, top: 8, loc: { dist: loc("uDist"),  rot: loc("uRot"), lens: loc("uLens"), lens2: loc("uLens2"), pos: loc("uPos"), eye: loc("uEye"), focus: loc("uFocus"), mode: loc("uMode"), view: loc("uView"), aspect: loc("uAspect"),
+                carRect: loc("uCarRect"), center: loc("uCenter"), wheels: loc("uWheels"), wheelBox: loc("uWheelBox") } };
+  ["uCar", "uWheelL", "uWheelR"].forEach((n, i) => gl.uniform1i(gl.getUniformLocation(prog, n), 6 + i));
   P.focus = DEFAULT_FOCUS;
+  loadCar();
   try { P.mode = +(localStorage.getItem("panoMode") || 0); P.focus = +(localStorage.getItem("panoFocus") || DEFAULT_FOCUS); } catch {}
 
   overlay.querySelectorAll("[data-m]").forEach(b => b.onclick = () => {
@@ -352,7 +385,57 @@ async function pollFit() {
 }
 
 // Draw the current video frames. Called every animation frame while open.
-export function render() {
+// Top down: pictures of the car from above (static/cars, made locally from 3D models of each car; the
+// viewer draws a plain box without them). The car is whichever the calibration was made for.
+const STEER_RATIO = { model_s_2021_hw4: 12.5, model_x_2021_hw4: 12.5, cybertruck_hw4: 12 };  // others about 10.5:1
+// Fetched once per page and kept: while six videos stream they take all the browser's connections to
+// the viewer, so fetching the pictures again on each opening could wait a long time.
+let carIndex = null;
+const carPics = {};  // vehicle id -> Promise of { meta, imgs: [body, left wheel, right wheel] } or null
+function carPictures(id) {
+  carIndex ??= fetch("/cars/index.json").then(r => r.ok ? r.json() : {}).catch(() => ({}));
+  return carPics[id] ??= carIndex.then(index => {
+    if (!index[id]) return null;
+    const imgs = ["", "-wheel-left", "-wheel-right"].map(suffix => {
+      const img = new Image();
+      img.src = `/cars/${id}${suffix}.png`;
+      return img.decode().then(() => img);
+    });
+    return Promise.all(imgs).then(imgs => ({ meta: index[id], imgs })).catch(() => null);
+  });
+}
+
+function loadCar() {
+  const want = calibInfo.vehicleId || "model_3_highland_hw4";
+  if (P.car?.id === want) return;
+  P.car = { id: want };
+  carPictures(want).then(pics => {
+    if (!pics || !P?.gl || P.car.id !== want) return;
+    const { gl } = P;
+    pics.imgs.forEach((img, i) => {
+      const t = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE6 + i);
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    });
+    P.car.meta = pics.meta;
+  });
+}
+
+// Road-wheel angles (radians, + = right) for a steering wheel angle in degrees: the inner wheel turns
+// more than the outer one, both pointing about the same centre of the turn (Ackermann).
+function wheelAngles(steer, m) {
+  const d = steer / (STEER_RATIO[P.car.id] || 10.5) * Math.PI / 180;
+  if (Math.abs(d) < 1e-4) return [d, d];
+  const R = m.wheelbase / Math.tan(d);  // turning radius at the middle of the rear axle, + = right
+  return [Math.atan(m.wheelbase / (R + m.track / 2)), Math.atan(m.wheelbase / (R - m.track / 2))];
+}
+
+export function render(steer = 0) {
   if (!P?.gl) return;
   const { gl, canvas } = P;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -385,6 +468,13 @@ export function render() {
   gl.uniform3f(P.loc.view, P.view.yaw * Math.PI / 180, P.view.pitch * Math.PI / 180, P.view.fov * Math.PI / 180);
   gl.uniform1f(P.loc.dist, P.top);
   gl.uniform1f(P.loc.aspect, W / H);
+  const m = P.car?.meta;
+  gl.uniform4f(P.loc.carRect, ...(m ? [m.left, m.back, m.right, m.front] : [0, 0, 0, 0]));
+  gl.uniform1f(P.loc.center, m ? (m.back + m.front) / 2 : 1.39);
+  if (m) {
+    gl.uniform4f(P.loc.wheels, m.wheelbase, m.track / 2, ...wheelAngles(steer, m));
+    gl.uniform1f(P.loc.wheelBox, m.wheelBox);
+  }
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 

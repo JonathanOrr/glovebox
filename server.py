@@ -277,6 +277,8 @@ def calibration_info():
         info["date"] = datetime.fromtimestamp(os.path.getmtime(CALIB_FILE)).isoformat(timespec="seconds")
         with open(CALIB_FILE) as f:
             info["cameras"] = json.load(f)
+        name = info["cameras"].get("vehicle")
+        info["vehicleId"] = next((v["id"] for v in vehicles() if v["name"] == name), None)
     return info
 
 

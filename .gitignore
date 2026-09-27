@@ -1,5 +1,7 @@
 # Local 3D car models (not ours to publish)
 models/
+# Top-down car images rendered from those models (local only)
+static/cars/
 # Per-car calibration output and scratch data
 calibration.json
 calibration.previous.json
