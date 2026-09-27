@@ -104,11 +104,26 @@ function master() {
   return cam ? cur.videos[cam].el : null;
 }
 
+// The six files of a minute end at the same instant but start up to half a second apart (each starts
+// recording at its own keyframe), so the same file time is a different moment in each camera. A camera
+// whose file is longer than the master's started earlier and is played that much further in.
+// (Measured on 131 drives: the jolt of a bump shows up in each camera exactly this far apart.)
+function camTime(cam, t) {
+  const v = cur.videos[cam].el, m = master();
+  const lag = m && v !== m && v.duration && m.duration ? v.duration - m.duration : 0;
+  return Math.min(Math.max(0, t + lag), v.duration || Infinity);
+}
+
 function loadSegment(i, offset) {
   const s = cur.segs[i];
   cur.seg = i;
   return new Promise(resolve => {
     let pending = 0;
+    const done = () => {
+      if (--pending) return;
+      CAMS.forEach(([cam]) => { const v = cur.videos[cam]; if (s.cameras.includes(cam) && v.el.duration) v.el.currentTime = camTime(cam, offset); });
+      resolve();
+    };
     CAMS.forEach(([cam]) => {
       const v = cur.videos[cam];
       if (s.cameras.includes(cam)) {
@@ -117,11 +132,8 @@ function loadSegment(i, offset) {
         pano.invalidate();
         v.el.playbackRate = cur.rate;
         pending++;
-        v.el.addEventListener("loadedmetadata", () => {
-          v.el.currentTime = offset;
-          if (--pending === 0) resolve();
-        }, { once: true });
-        v.el.addEventListener("error", () => { if (--pending === 0) resolve(); }, { once: true });
+        v.el.addEventListener("loadedmetadata", done, { once: true });
+        v.el.addEventListener("error", done, { once: true });
       } else {
         v.box.classList.add("missing");
         v.el.removeAttribute("src");
@@ -147,7 +159,7 @@ async function seekGlobal(t) {
     await loadSegment(i, off);
     if (cur.playing) playAll();
   } else {
-    Object.values(cur.videos).forEach(v => { if (v.el.src) v.el.currentTime = off; });
+    Object.entries(cur.videos).forEach(([cam, v]) => { if (v.el.src) v.el.currentTime = camTime(cam, off); });
   }
   tick(true);
 }
@@ -186,12 +198,13 @@ function tick(once) {
   if (!cur || cur.dead) return;
   const m = master();
   if (m) {
-    Object.values(cur.videos).forEach(v => {
+    Object.entries(cur.videos).forEach(([cam, v]) => {
       if (v.el === m || !v.el.src || v.el.readyState < 1) return;
       // Browsers let separate videos drift apart by several frames. Far off: jump. Otherwise speed the
       // camera up or slow it down a little so it catches up smoothly (a jump would stutter).
-      const drift = v.el.currentTime - m.currentTime;
-      if (Math.abs(drift) > 0.3 || m.paused) { if (Math.abs(drift) > 0.01) v.el.currentTime = m.currentTime; }
+      const want = camTime(cam, m.currentTime);
+      const drift = v.el.currentTime - want;
+      if (Math.abs(drift) > 0.3 || m.paused) { if (Math.abs(drift) > 0.01) v.el.currentTime = want; }
       else v.el.playbackRate = cur.rate * (1 - Math.max(-0.2, Math.min(0.2, drift * 4)));
       if (cur.playing && v.el.paused && !m.paused) v.el.play().catch(() => {});
     });
